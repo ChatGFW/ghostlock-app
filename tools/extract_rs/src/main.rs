@@ -261,14 +261,15 @@ fn run(cli: &Cli) -> Result<i32> {
         kernel_phys_load = cli.phys;
     }
 
-    // vendor_boot.img's kernel_addr field
-    // It supplies both kernel_phys_load and kernel_phys_offset directly 
-    // which we can use for Mediatek devices
+    // vendor_boot.img's kernel_addr field always supplies kernel_phys_load;
+    // kernel_phys_offset (the DRAM base) is only set when the alignment
+    // pattern proves it (see vendor_boot::classify) rather than merely
+    // being consistent with it, e.g. for MediaTek devices.
     let mut vendor_boot_phys_offset: Option<u64> = None;
     if kernel_phys_load.is_none() {
         if let Some(vb) = &cli.vendor_boot {
             match recover_kernel_phys_from_vendor_boot(vb) {
-                Ok((load, offset)) => {
+                Ok((load, Some(offset))) => {
                     eprintln!(
                         "info: vendor_boot; kernel_phys_load=0x{load:x} \
                          kernel_phys_offset=0x{offset:x}"
@@ -276,6 +277,16 @@ fn run(cli: &Cli) -> Result<i32> {
                     phys_source = "vendor_boot header (MediaTek)";
                     kernel_phys_load = Some(load);
                     vendor_boot_phys_offset = Some(offset);
+                }
+                Ok((load, None)) => {
+                    eprintln!(
+                        "info: vendor_boot; kernel_phys_load=0x{load:x} \
+                         (MiB-aligned but not provably the DRAM base; \
+                         kernel_phys_offset left unset, pass --iomem or \
+                         --phys to supply it)"
+                    );
+                    phys_source = "vendor_boot header (MediaTek)";
+                    kernel_phys_load = Some(load);
                 }
                 Err(err) => eprintln!(
                     "warning: vendor_boot header parse failed: {err}; \

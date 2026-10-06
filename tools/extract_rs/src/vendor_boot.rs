@@ -11,15 +11,16 @@ const VNDRBOOT_MAGIC: &[u8; 8] = b"VNDRBOOT";
 const ARM64_TEXT_ALIGN: u64 = 0x8_0000; // 512 KiB
 
 /// Reads `vendor_boot.img`'s `kernel_addr` field and derives
-/// `(kernel_phys_load, kernel_phys_offset)`.
-pub fn recover_kernel_phys_from_vendor_boot(path: &Path) -> Result<(u64, u64)> {
+/// `kernel_phys_load`, plus `kernel_phys_offset` when the alignment pattern
+/// proves it rather than merely being consistent with it.
+pub fn recover_kernel_phys_from_vendor_boot(path: &Path) -> Result<(u64, Option<u64>)> {
     let data = std::fs::read(path)?;
     parse_vendor_boot_header(&data)
 }
 
 /// Layout (`vendor_boot_img_hdr_v3/v4` common prefix, little-endian):
 /// `magic[8] header_version[4] page_size[4] kernel_addr[4] ...`
-fn parse_vendor_boot_header(data: &[u8]) -> Result<(u64, u64)> {
+fn parse_vendor_boot_header(data: &[u8]) -> Result<(u64, Option<u64>)> {
     if data.len() < 20 || &data[0..8] != VNDRBOOT_MAGIC {
         return Err(ExtractError::new(
             "not a vendor_boot.img (missing VNDRBOOT magic)",
@@ -36,14 +37,24 @@ fn parse_vendor_boot_header(data: &[u8]) -> Result<(u64, u64)> {
 }
 
 /// `kernel_phys_load = kernel_addr` (vendor_boot carries no separate base
-/// field; it is already the combined physical load address). From that,
-/// derive `kernel_phys_offset` from the low-20-bit alignment pattern.
-fn classify(phys_load: u64) -> Result<(u64, u64)> {
+/// field; it is already the combined physical load address).
+///
+/// `kernel_phys_offset` (the DRAM base) is only ever returned when the
+/// low-20-bit pattern *proves* it, not merely when it is consistent with it:
+/// - `low == ARM64_TEXT_ALIGN` unambiguously means `phys_load = dram_base +
+///   ARM64_TEXT_ALIGN`, so `phys_offset = phys_load - ARM64_TEXT_ALIGN`.
+/// - `low == 0` only tells us `phys_load` is MiB-aligned. That is true both
+///   when `phys_load == dram_base` *and* when the kernel is loaded some
+///   whole number of MiB above the base (e.g. `phys_load=0x40200000` above
+///   `dram_base=0x40000000`). Without a second, independent source (e.g.
+///   `/proc/iomem`) we cannot tell those apart, so we return `phys_load`
+///   with no offset rather than guessing one.
+fn classify(phys_load: u64) -> Result<(u64, Option<u64>)> {
     let low = phys_load & 0xF_FFFF;
     let phys_offset = if low == ARM64_TEXT_ALIGN {
-        phys_load - ARM64_TEXT_ALIGN
+        Some(phys_load - ARM64_TEXT_ALIGN)
     } else if low == 0 {
-        phys_load
+        None
     } else {
         return Err(ExtractError::new(format!(
             "kernel_phys_load=0x{phys_load:x} matches neither known MediaTek \
@@ -68,18 +79,32 @@ mod tests {
 
     #[test]
     fn case_a_arm64_gki_alignment() {
-        // Use an example (Helio G81 Ultra): kernel_addr=0x40080000 -> phys_offset=0x40000000.
+        // Use an example (Helio G81 Ultra): kernel_addr=0x40080000 proves
+        // phys_offset=0x40000000 via the text-align pattern.
         let (load, offset) = parse_vendor_boot_header(&header(0x4008_0000)).unwrap();
         assert_eq!(load, 0x4008_0000);
-        assert_eq!(offset, 0x4000_0000);
+        assert_eq!(offset, Some(0x4000_0000));
     }
 
     #[test]
-    fn case_b_bootloader_internal_alignment() {
-        // Use an example (Dimensity 6300): kernel_addr=0x40000000 -> phys_offset=0x40000000.
+    fn mib_aligned_load_does_not_imply_dram_base() {
+        // kernel_addr=0x40000000 is consistent with dram_base=0x40000000
+        // (Dimensity 6300), but is equally consistent with a kernel loaded
+        // some whole number of MiB above a lower, unseen base. The pattern
+        // alone cannot distinguish these, so phys_offset must stay unknown.
         let (load, offset) = parse_vendor_boot_header(&header(0x4000_0000)).unwrap();
         assert_eq!(load, 0x4000_0000);
-        assert_eq!(offset, 0x4000_0000);
+        assert_eq!(offset, None);
+    }
+
+    #[test]
+    fn mib_aligned_load_above_base_is_not_mistaken_for_it() {
+        // Regression for the exact case the reviewer flagged: a kernel
+        // loaded at 0x40200000 above a 0x40000000 base is also MiB-aligned
+        // and must NOT yield phys_offset=0x40200000.
+        let (load, offset) = parse_vendor_boot_header(&header(0x4020_0000)).unwrap();
+        assert_eq!(load, 0x4020_0000);
+        assert_eq!(offset, None);
     }
 
     #[test]
