@@ -23,6 +23,7 @@ use ghostlock_extract::report;
 use ghostlock_extract::symbols::{
     kernel_layout_verified, kernel_struct_macro, resolve_structs, resolve_symbols,
 };
+use ghostlock_extract::vendor_boot::recover_kernel_phys_from_vendor_boot;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -48,6 +49,10 @@ struct Cli {
     /// memory-map table when xbl_config carries no FDT memory map
     #[arg(long)]
     uefi: Option<PathBuf>,
+    /// optional vendor_boot.img (MediaTek only); derive kernel physical load
+    /// AND offset from its header kernel_addr field.
+    #[arg(long)]
+    vendor_boot: Option<PathBuf>,
     /// kernel physical load address (hex or decimal); overrides defaults
     #[arg(long, value_parser = parse_int)]
     phys: Option<u64>,
@@ -256,6 +261,30 @@ fn run(cli: &Cli) -> Result<i32> {
         kernel_phys_load = cli.phys;
     }
 
+    // vendor_boot.img's kernel_addr field
+    // It supplies both kernel_phys_load and kernel_phys_offset directly 
+    // which we can use for Mediatek devices
+    let mut vendor_boot_phys_offset: Option<u64> = None;
+    if kernel_phys_load.is_none() {
+        if let Some(vb) = &cli.vendor_boot {
+            match recover_kernel_phys_from_vendor_boot(vb) {
+                Ok((load, offset)) => {
+                    eprintln!(
+                        "info: vendor_boot; kernel_phys_load=0x{load:x} \
+                         kernel_phys_offset=0x{offset:x}"
+                    );
+                    phys_source = "vendor_boot header (MediaTek)";
+                    kernel_phys_load = Some(load);
+                    vendor_boot_phys_offset = Some(offset);
+                }
+                Err(err) => eprintln!(
+                    "warning: vendor_boot header parse failed: {err}; \
+                     trying other sources"
+                ),
+            }
+        }
+    }
+
     let btf_at = boot.embedded_btf_at();
     let ks = resolve_kallsyms(
         &boot,
@@ -271,7 +300,7 @@ fn run(cli: &Cli) -> Result<i32> {
 
     // DRAM base / linear-map offset, and (with the kallsyms delta) the kernel
     // physical load, from /proc/iomem when available (rooted device or --iomem).
-    let mut kernel_phys_offset: Option<u64> = None;
+    let mut kernel_phys_offset: Option<u64> = vendor_boot_phys_offset;
     let iomem_info = match iomem::load(cli.iomem.as_deref()) {
         Ok(info) => info,
         Err(err) => {
@@ -280,7 +309,9 @@ fn run(cli: &Cli) -> Result<i32> {
         }
     };
     if let Some(info) = iomem_info {
-        kernel_phys_offset = info.dram_base;
+        if let Some(dram_base) = info.dram_base {
+            kernel_phys_offset = Some(dram_base);
+        }
         if kernel_phys_load.is_none() {
             if let (Some(kc), Some(text), Some(stext)) = (
                 info.kernel_code_start,

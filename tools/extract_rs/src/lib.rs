@@ -11,3 +11,4 @@ pub mod kallsyms_finder;
 pub mod payload;
 pub mod report;
 pub mod symbols;
+pub mod vendor_boot;
