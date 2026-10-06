@@ -14,8 +14,10 @@ const ARM64_TEXT_ALIGN: u64 = 0x8_0000; // 512 KiB
 /// `kernel_phys_load`, plus `kernel_phys_offset` when the alignment pattern
 /// proves it rather than merely being consistent with it.
 pub fn recover_kernel_phys_from_vendor_boot(path: &Path) -> Result<(u64, Option<u64>)> {
-    let data = std::fs::read(path)?;
-    parse_vendor_boot_header(&data)
+    let mut header = [0u8; 20];
+    let mut file = std::fs::File::open(path)?;
+    std::io::Read::read_exact(&mut file, &mut header)?;
+    parse_vendor_boot_header(&header)
 }
 
 /// Layout (`vendor_boot_img_hdr_v3/v4` common prefix, little-endian):
