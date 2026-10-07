@@ -46,7 +46,11 @@ sealed interface GhostlockEffect {
 
 private const val OverwriteSummaryLimit = 12
 
-enum class DocumentRequest { ImportOffsetsHocon, ImportOffsetsJson, BootImage, XblImage, PayloadImage, UefiImage }
+enum class DocumentRequest { ImportOffsetsHocon, ImportOffsetsJson, BootImage, XblImage, PayloadImage, UefiImage, VendorBootImage }
+
+/** Options offered by [promptBootAttach], in display order. VENDOR_BOOT is
+ * only ever added to that list for MediaTek devices */
+private enum class AttachOption { NONE, XBL, UEFI, XBL_UEFI, VENDOR_BOOT }
 
 private enum class ParseDialogStage { Mode, Attach }
 
@@ -72,9 +76,12 @@ class GhostlockViewModel(
     private var kernelSnapshot: KernelSnapshot? = null
     private var pendingParseWithXbl = false
     private var pendingParseWithUefi = false
+    private var pendingParseWithVendorBoot = false
     private var pendingBootPath: String? = null
     private var pendingXblPath: String? = null
     private var pendingUefiPath: String? = null
+    private var pendingVendorBootPath: String? = null
+    private var pendingAttachOptions: List<AttachOption> = emptyList()
     private var parseDialogStage = ParseDialogStage.Mode
     private var pendingConfirmation: PendingConfirmation? = null
 
@@ -928,21 +935,25 @@ class GhostlockViewModel(
         }
     }
 
-    /** boot.img was chosen: let the user attach xbl_config / uefi (optional). */
+    /** boot.img was chosen: let the user attach xbl_config / uefi (optional),
+     * or, on a MediaTek device, a vendor_boot.img instead */
     private fun promptBootAttach() {
         parseDialogStage = ParseDialogStage.Attach
+        val options = buildList {
+            add(AttachOption.NONE to R.string.parse_attach_none)
+            add(AttachOption.XBL to R.string.parse_attach_xbl)
+            add(AttachOption.UEFI to R.string.parse_attach_uefi)
+            add(AttachOption.XBL_UEFI to R.string.parse_attach_xbl_uefi)
+            if (isMediaTek()) add(AttachOption.VENDOR_BOOT to R.string.parse_attach_vendor_boot)
+        }
+        pendingAttachOptions = options.map { it.first }
         mutableState.update {
             it.copy(
                 dialogVisible = true,
                 dialogType = DialogType.LIST,
                 dialogTitleRes = R.string.parse_boot_attach_title,
                 dialogItems = emptyList(),
-                dialogItemResIds = listOf(
-                    R.string.parse_attach_none,
-                    R.string.parse_attach_xbl,
-                    R.string.parse_attach_uefi,
-                    R.string.parse_attach_xbl_uefi,
-                ),
+                dialogItemResIds = options.map { it.second },
             )
         }
     }
@@ -965,6 +976,7 @@ class GhostlockViewModel(
             DocumentRequest.BootImage -> stageBoot(uri)
             DocumentRequest.XblImage -> stageXbl(uri)
             DocumentRequest.UefiImage -> stageUefi(uri)
+            DocumentRequest.VendorBootImage -> stageVendorBoot(uri)
             DocumentRequest.PayloadImage -> stagePayload(uri)
             DocumentRequest.ImportOffsetsHocon, DocumentRequest.ImportOffsetsJson -> Unit
         }
@@ -979,6 +991,7 @@ class GhostlockViewModel(
             DocumentRequest.BootImage -> uris.firstOrNull()?.let(::stageBoot)
             DocumentRequest.XblImage -> uris.firstOrNull()?.let(::stageXbl)
             DocumentRequest.UefiImage -> uris.firstOrNull()?.let(::stageUefi)
+            DocumentRequest.VendorBootImage -> uris.firstOrNull()?.let(::stageVendorBoot)
             DocumentRequest.PayloadImage -> uris.firstOrNull()?.let(::stagePayload)
         }
     }
@@ -991,11 +1004,13 @@ class GhostlockViewModel(
                 1 -> promptBootAttach()
             }
 
-            ParseDialogStage.Attach -> when (index) {
-                0 -> pickBoot(withXbl = false, withUefi = false)
-                1 -> pickBoot(withXbl = true, withUefi = false)
-                2 -> pickBoot(withXbl = false, withUefi = true)
-                3 -> pickBoot(withXbl = true, withUefi = true)
+            ParseDialogStage.Attach -> when (pendingAttachOptions.getOrNull(index)) {
+                AttachOption.NONE -> pickBoot(withXbl = false, withUefi = false, withVendorBoot = false)
+                AttachOption.XBL -> pickBoot(withXbl = true, withUefi = false, withVendorBoot = false)
+                AttachOption.UEFI -> pickBoot(withXbl = false, withUefi = true, withVendorBoot = false)
+                AttachOption.XBL_UEFI -> pickBoot(withXbl = true, withUefi = true, withVendorBoot = false)
+                AttachOption.VENDOR_BOOT -> pickBoot(withXbl = false, withUefi = false, withVendorBoot = true)
+                null -> Unit
             }
         }
     }
@@ -1129,11 +1144,13 @@ class GhostlockViewModel(
         send(GhostlockEffect.PickDocument(DocumentRequest.PayloadImage))
     }
 
-    private fun pickBoot(withXbl: Boolean, withUefi: Boolean) {
+    private fun pickBoot(withXbl: Boolean, withUefi: Boolean, withVendorBoot: Boolean = false) {
         pendingParseWithXbl = withXbl
         pendingParseWithUefi = withUefi
+        pendingParseWithVendorBoot = withVendorBoot
         pendingXblPath = null
         pendingUefiPath = null
+        pendingVendorBootPath = null
         if (withXbl) send(GhostlockEffect.Toast(R.string.parse_pick_boot_hint))
         send(GhostlockEffect.PickDocument(DocumentRequest.BootImage))
     }
@@ -1153,6 +1170,11 @@ class GhostlockViewModel(
                     pendingParseWithUefi -> {
                         send(GhostlockEffect.Toast(R.string.parse_pick_uefi_hint))
                         send(GhostlockEffect.PickDocument(DocumentRequest.UefiImage))
+                    }
+
+                    pendingParseWithVendorBoot -> {
+                        send(GhostlockEffect.Toast(R.string.parse_pick_vendor_boot_hint))
+                        send(GhostlockEffect.PickDocument(DocumentRequest.VendorBootImage))
                     }
 
                     else -> runParse(bootPath)
@@ -1198,6 +1220,26 @@ class GhostlockViewModel(
                 pendingUefiPath = uefiPath
                 appendLog("uefi.img ready: $uefiPath")
                 runParse(bootPath, xblPath = pendingXblPath, uefiPath = uefiPath)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                appendLog("parse error: ${error.message}")
+                appendLog("result: parse failed")
+                showNotice(R.string.parse_result_title, R.string.parse_failed)
+            }
+        }
+    }
+
+    /** vendor_boot.img was chosen (MediaTek only): parses boot.img + this
+     * directly, no xbl_config/uefi/root needed. */
+    private fun stageVendorBoot(uri: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val bootPath = requireNotNull(pendingBootPath) { "boot.img is not staged" }
+                val vendorBootPath = readDocumentUseCase.cache(uri, "vendor_boot.img")
+                pendingVendorBootPath = vendorBootPath
+                appendLog("vendor_boot.img ready: $vendorBootPath")
+                runParse(bootPath, vendorBootPath = vendorBootPath)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -1265,13 +1307,19 @@ class GhostlockViewModel(
         input: String,
         xblPath: String? = null,
         uefiPath: String? = null,
+        vendorBootPath: String? = null,
         overwrite: Boolean = false,
     ) {
         if (!beginOperation()) return
         try {
-            when (val result = parseSourceUseCase(input, xblPath, uefiPath, overwrite, ::appendLog)) {
+            when (
+                val result = parseSourceUseCase(
+                    input, xblPath, uefiPath, vendorBootPath, overwrite, ::appendLog,
+                )
+            ) {
                 is ParseResult.RequiresOverwrite -> {
-                    pendingConfirmation = PendingConfirmation.Parse(input, xblPath, uefiPath)
+                    pendingConfirmation =
+                        PendingConfirmation.Parse(input, xblPath, uefiPath, vendorBootPath)
                     showOverwriteDialog(result.releases)
                 }
 
@@ -1364,6 +1412,7 @@ class GhostlockViewModel(
                     confirmation.input,
                     confirmation.xblPath,
                     confirmation.uefiPath,
+                    confirmation.vendorBootPath,
                     overwrite = true,
                 )
             }
@@ -1479,6 +1528,11 @@ class GhostlockViewModel(
 
     private sealed interface PendingConfirmation {
         data class Import(val documents: Map<String, String>) : PendingConfirmation
-        data class Parse(val input: String, val xblPath: String?, val uefiPath: String?) : PendingConfirmation
+        data class Parse(
+            val input: String,
+            val xblPath: String?,
+            val uefiPath: String?,
+            val vendorBootPath: String? = null,
+        ) : PendingConfirmation
     }
 }
