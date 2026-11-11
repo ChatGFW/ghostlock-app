@@ -12,6 +12,7 @@
 
 #include "common.h"
 
+#include "kernel/timer_kbuilds.h"
 #include "profile/entry.h"
 #include "support/fatal_error.hpp"
 #include "support/run_state.hpp"
@@ -90,6 +91,18 @@ int main(int argc, char **argv) {
          * fallback when a middleware id was not carried. */
         if (ids.middleware == 0) {
             ids.middleware = static_cast<uint16_t>(decoded.route_kind());
+        }
+        /* CVE-2026-98260 routing. The running build's own timer-UAF constant
+         * table (kernel/timer_kbuilds.h, exact `uname -r` match) is the
+         * authority: when it holds an entry and the wire still names the futex
+         * backend - the Kotlin side has no 98260 id - the backend axis is
+         * switched here so the orchestrator dispatches the timer chain. A build
+         * without a table keeps the futex route untouched. */
+        if (timer::kbuild_current() != nullptr &&
+            static_cast<runtime::BackendKind>(ids.backend) ==
+                runtime::BackendKind::Cve2026_43499) {
+            ids.backend = static_cast<decltype(ids.backend)>(runtime::BackendKind::Cve2026_98260);
+            pr_error("backend routed to cve_2026_98260 for this build\n");
         }
         const runtime::ComponentSelection selection{
             static_cast<runtime::FrontendKind>(ids.frontend),

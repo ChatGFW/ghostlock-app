@@ -39,6 +39,7 @@ CXX_SRCS := \
   core/session/exploit_session.cpp \
   core/session/root_child_frontend.cpp \
   core/session/backend/cve_2026_43499_backend.cpp \
+  core/session/backend/cve_2026_98260_backend.cpp \
   core/session/handoff_probe.cpp \
   core/session/victim_process.cpp \
   core/session/victim_context.cpp \
@@ -54,7 +55,7 @@ CXX_OBJS := $(patsubst %.cpp,$(NATIVE_BUILD_DIR)/%.o,$(CXX_SRCS))
 OBJS := $(C_OBJS) $(CXX_OBJS)
 
 # Native interface and target headers also trigger a rebuild.
-HDRS := $(wildcard core/*.h core/*.hpp core/*/*.h core/*/*.hpp)
+HDRS := $(wildcard core/*.h core/*.hpp core/*/*.h core/*/*.hpp core/*/*/*.h core/*/*/*.hpp)
 
 # Device offsets are selected at runtime from uname -r.
 TARGET_CONFIG ?= kernel/target.h

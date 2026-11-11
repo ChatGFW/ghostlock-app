@@ -20,6 +20,7 @@ use ghostlock_extract::kallsyms::Kallsyms;
 use ghostlock_extract::kallsyms_finder;
 use ghostlock_extract::payload;
 use ghostlock_extract::report;
+use ghostlock_extract::timer_kbuild;
 use ghostlock_extract::symbols::{
     kernel_layout_verified, kernel_struct_macro, resolve_structs, resolve_symbols,
 };
@@ -29,7 +30,7 @@ use ghostlock_extract::vendor_boot::recover_kernel_phys_from_vendor_boot;
 #[command(
     name = "ghostlock-extract",
     about = "Extract GhostLock kernel offsets from boot.img / arm64 Image / payload.bin / OTA URL",
-    after_help = "examples:\n  ghostlock-extract boot.img --format conf --out profile.conf\n  ghostlock-extract boot.img --format json --out offsets.json\n  ghostlock-extract https://host/payload.bin --format json --out offsets.json\nWhen --kallsyms is omitted, the embedded kallsyms table is recovered from the kernel image itself (no root needed); on a rooted phone /proc/kallsyms is used first."
+    after_help = "examples:\n  ghostlock-extract boot.img --format conf --out profile.conf\n  ghostlock-extract boot.img --format json --out offsets.json\n  ghostlock-extract boot.img --format kbuild --out kbuilds/<release>.h\n  ghostlock-extract https://host/payload.bin --format json --out offsets.json\nWhen --kallsyms is omitted, the embedded kallsyms table is recovered from the kernel image itself (no root needed); on a rooted phone /proc/kallsyms is used first."
 )]
 struct Cli {
     /// boot.img, raw arm64 Image, gzip Image, payload.bin, OTA ZIP, or http(s) OTA URL
@@ -56,8 +57,9 @@ struct Cli {
     /// kernel physical load address (hex or decimal); overrides defaults
     #[arg(long, value_parser = parse_int)]
     phys: Option<u64>,
-    /// output format: text (JSON), json, or conf (flattened GLK profile HOCON)
-    #[arg(long, value_parser = ["text", "json", "conf"], default_value = "text")]
+    /// output format: text (JSON), json, conf (flattened GLK profile HOCON)
+    /// or kbuild (CVE-2026-98260 constant header for src/core/kernel/kbuilds/)
+    #[arg(long, value_parser = ["text", "json", "conf", "kbuild"], default_value = "text")]
     format: String,
     /// route written to --format conf; defaults to the analysis suggestion
     #[arg(long, value_parser = ["tcp_zerocopy", "select_stack", "multicast_waiter"])]
@@ -350,7 +352,9 @@ fn run(cli: &Cli) -> Result<i32> {
              (remove_waiter@{remove_waiter:#x} still uses current)"
         ),
         Err(err) => {
-            if !cli.analysis {
+            // kbuild mode derives CVE-2026-98260 constants; the state of the
+            // futex primitive is irrelevant there, so it must not stop it.
+            if !cli.analysis && cli.format != "kbuild" {
                 eprintln!("error: {err}");
                 return Ok(6);
             }
@@ -411,6 +415,26 @@ fn run(cli: &Cli) -> Result<i32> {
     }
     if cli.route.is_some() && cli.format != "conf" {
         eprintln!("warning: --route only affects --format conf; ignoring");
+    }
+
+    if cli.format == "kbuild" {
+        // CVE-2026-98260: render a per-build constant header from this image.
+        let kb = timer_kbuild::derive(
+            &boot.kernel,
+            &symbols,
+            base,
+            btf.as_ref(),
+            release.as_deref().unwrap_or(""),
+        )?;
+        timer_kbuild::ensure_usable(&kb)?;
+        eprint!("{}", timer_kbuild::render_text(&kb));
+        let text = timer_kbuild::render_header(&kb);
+        if let Some(out) = &cli.out {
+            std::fs::write(out, text).map_err(|err| ExtractError::new(format!("{err}")))?;
+        } else {
+            print!("{text}");
+        }
+        return Ok(0);
     }
 
     if cli.analysis {

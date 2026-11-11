@@ -19,7 +19,15 @@ namespace ghostlock::runtime::backend {
         static constexpr BackendKind kind = BackendKind::Cve2026_64560;
     };
 
+    /* CVE-2026-98260 (POSIX CPU timer UAF). Available, because the chain carries
+     * its own per-build constant table (kernel/timer_kbuilds.h) instead of the
+     * futex write primitive, so it shares nothing with the 43499 route. */
+    struct Cve2026_98260 final {
+        static constexpr BackendKind kind = BackendKind::Cve2026_98260;
+    };
+
     static_assert(backend_available(Cve2026_43499::kind));
+    static_assert(backend_available(Cve2026_98260::kind));
     static_assert(!backend_available(Cve2026_64560::kind));
 } // namespace ghostlock::runtime::backend
 

@@ -42,7 +42,9 @@ namespace ghostlock::runtime {
 
     /* The declared registry. Appending a backend lists it here once; the host
      * test walks it and checks every entry against the catalogue. */
-    using BackendIdentityList = std::tuple<backend::Cve2026_43499, backend::Cve2026_64560>;
+    using BackendIdentityList =
+        std::tuple<backend::Cve2026_43499, backend::Cve2026_64560,
+                   backend::Cve2026_98260>;
 
     template <class Fn, class... Bs>
     constexpr void for_each_backend(Fn &&fn, std::tuple<Bs...> *) {
@@ -57,6 +59,7 @@ namespace ghostlock::runtime {
 
     static_assert(BackendIdentity<backend::Cve2026_43499>);
     static_assert(BackendIdentity<backend::Cve2026_64560>);
+    static_assert(BackendIdentity<backend::Cve2026_98260>);
 } // namespace ghostlock::runtime
 
 #endif

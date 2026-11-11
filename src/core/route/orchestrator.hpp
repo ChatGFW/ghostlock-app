@@ -5,6 +5,7 @@
 #include "route/pipeline.hpp"
 #include "route/route_policy.hpp"
 #include "session/backend/cve_2026_43499_backend.hpp"
+#include "session/backend/cve_2026_98260_backend.hpp"
 #include "session/exploit_session.hpp"
 #include "session/root_child_frontend.hpp"
 
@@ -40,6 +41,30 @@ namespace ghostlock::runtime {
                                    session::backend::Cve2026_43499Policy,
                                    route::MulticastPolicy>;
                 static_assert(P::target == DispatchTarget::RootChild_Cve43499_MulticastWaiter,
+                              "dispatch case must match the pipeline's target");
+                return P::run(exploit_session, decoded, debug_dir, force_attack);
+            }
+            case DispatchTarget::RootChild_Cve98260_SelectStack: {
+                using P = Pipeline<session::frontend::RootChildPolicy,
+                                   session::backend::Cve2026_98260Policy,
+                                   route::SelectPolicy>;
+                static_assert(P::target == DispatchTarget::RootChild_Cve98260_SelectStack,
+                              "dispatch case must match the pipeline's target");
+                return P::run(exploit_session, decoded, debug_dir, force_attack);
+            }
+            case DispatchTarget::RootChild_Cve98260_TcpZerocopy: {
+                using P = Pipeline<session::frontend::RootChildPolicy,
+                                   session::backend::Cve2026_98260Policy,
+                                   route::TcpPolicy>;
+                static_assert(P::target == DispatchTarget::RootChild_Cve98260_TcpZerocopy,
+                              "dispatch case must match the pipeline's target");
+                return P::run(exploit_session, decoded, debug_dir, force_attack);
+            }
+            case DispatchTarget::RootChild_Cve98260_MulticastWaiter: {
+                using P = Pipeline<session::frontend::RootChildPolicy,
+                                   session::backend::Cve2026_98260Policy,
+                                   route::MulticastPolicy>;
+                static_assert(P::target == DispatchTarget::RootChild_Cve98260_MulticastWaiter,
                               "dispatch case must match the pipeline's target");
                 return P::run(exploit_session, decoded, debug_dir, force_attack);
             }

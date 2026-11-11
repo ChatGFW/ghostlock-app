@@ -19,6 +19,7 @@ namespace ghostlock::runtime {
     enum class BackendKind : std::uint8_t {
         Cve2026_43499 = 1,
         Cve2026_64560 = 2,
+        Cve2026_98260 = 3,
     };
 
     /* Middleware reuses the profile route enum: the three tactics are exactly
@@ -37,7 +38,7 @@ namespace ghostlock::runtime {
     }
 
     [[nodiscard]] constexpr bool backend_available(BackendKind kind) noexcept {
-        return kind == BackendKind::Cve2026_43499;
+        return kind == BackendKind::Cve2026_43499 || kind == BackendKind::Cve2026_98260;
     }
 
     [[nodiscard]] constexpr bool middleware_available(MiddlewareKind kind) noexcept {
@@ -64,7 +65,8 @@ namespace ghostlock::runtime {
     [[nodiscard]] constexpr bool combination_supported(
         const ComponentSelection &selection) noexcept {
         return selection.frontend == FrontendKind::RootChild &&
-               selection.backend == BackendKind::Cve2026_43499 &&
+               (selection.backend == BackendKind::Cve2026_43499 ||
+                selection.backend == BackendKind::Cve2026_98260) &&
                middleware_available(selection.middleware);
     }
 
@@ -80,13 +82,30 @@ namespace ghostlock::runtime {
         RootChild_Cve43499_SelectStack,
         RootChild_Cve43499_TcpZerocopy,
         RootChild_Cve43499_MulticastWaiter,
+        RootChild_Cve98260_SelectStack,
+        RootChild_Cve98260_TcpZerocopy,
+        RootChild_Cve98260_MulticastWaiter,
     };
 
     [[nodiscard]] constexpr DispatchTarget dispatch_target_of(
         FrontendKind frontend, BackendKind backend,
         MiddlewareKind middleware) noexcept {
-        if (frontend != FrontendKind::RootChild ||
-            backend != BackendKind::Cve2026_43499) {
+        if (frontend != FrontendKind::RootChild) {
+            return DispatchTarget::None;
+        }
+        if (backend == BackendKind::Cve2026_98260) {
+            switch (middleware) {
+                case MiddlewareKind::SelectStack:
+                    return DispatchTarget::RootChild_Cve98260_SelectStack;
+                case MiddlewareKind::TcpZerocopy:
+                    return DispatchTarget::RootChild_Cve98260_TcpZerocopy;
+                case MiddlewareKind::MulticastWaiter:
+                    return DispatchTarget::RootChild_Cve98260_MulticastWaiter;
+                default:
+                    return DispatchTarget::None;
+            }
+        }
+        if (backend != BackendKind::Cve2026_43499) {
             return DispatchTarget::None;
         }
         switch (middleware) {
@@ -113,7 +132,11 @@ namespace ghostlock::runtime {
     }
 
     [[nodiscard]] constexpr std::string_view backend_name(BackendKind kind) noexcept {
-        return kind == BackendKind::Cve2026_43499 ? "cve_2026_43499" : "cve_2026_64560";
+        switch (kind) {
+            case BackendKind::Cve2026_43499: return "cve_2026_43499";
+            case BackendKind::Cve2026_98260: return "cve_2026_98260";
+            default: return "cve_2026_64560";
+        }
     }
 
     [[nodiscard]] constexpr std::string_view middleware_name(MiddlewareKind kind) noexcept {
